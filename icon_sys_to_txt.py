@@ -7,27 +7,39 @@ def scale_sys_value(v):
     return round(min(128, v) * 255 / 128)
 
 def read_rgb_rgba_block(data, offset):
-    # PS2 stores RGBA as: [R, _, _, _, G, _, _, _, B, _, _, _, A, _, _, _]
+    # PS2 uses 4-byte aligned RGBA: R @ +0, G @ +4, B @ +8
     r = scale_sys_value(data[offset])
     g = scale_sys_value(data[offset + 4])
     b = scale_sys_value(data[offset + 8])
     return (r, g, b)
 
 def read_light_rgb_floats(data, offset):
-    # Each light color is 3 float32 values (R, G, B)
-    return tuple(round(struct.unpack('<f', data[offset + i*4:offset + i*4 + 4])[0] * 255) for i in range(3))
+    # 3 consecutive float32s (R, G, B), scaled to 255
+    return tuple(round(struct.unpack('<f', data[offset + i*4 : offset + i*4 + 4])[0] * 255) for i in range(3))
 
 def read_light_direction(data, offset):
-    # 3 consecutive float32 values: X, Y, Z
     return struct.unpack('<fff', data[offset:offset+12])
 
-def decode_title(data, offset=0xC0, length=68):
-    raw = data[offset:offset+length].split(b'\x00')[0]
+def decode_title_pair(data, title_offset=0xC0, length=68):
+    split_offset = struct.unpack("<H", data[0x06:0x08])[0]
+    title_block = data[title_offset:title_offset + length]
+
+    title0_bytes = title_block[:split_offset]
+    title1_bytes = title_block[split_offset:]
+
     try:
-        decoded = raw.decode('shift_jis')
-        return unicodedata.normalize('NFKC', decoded)
-    except Exception:
-        return ""
+        title0 = title0_bytes.split(b'\x00')[0].decode('shift_jis', errors='ignore').strip()
+        title0 = unicodedata.normalize('NFKC', title0)
+    except:
+        title0 = "[decode error]"
+
+    try:
+        title1 = title1_bytes.split(b'\x00')[0].decode('shift_jis', errors='ignore').strip()
+        title1 = unicodedata.normalize('NFKC', title1)
+    except:
+        title1 = ""
+
+    return title0, title1
 
 def parse_icon_sys(filepath):
     with open(filepath, "rb") as f:
@@ -36,9 +48,11 @@ def parse_icon_sys(filepath):
     if data[:4] != b"PS2D":
         raise ValueError("This is not a valid icon.sys file (missing PS2D header).")
 
+    title0, title1 = decode_title_pair(data)
+
     parsed = {
-        "title0": decode_title(data),
-        "title1": "",
+        "title0": title0,
+        "title1": title1,
         "bgcola": data[0x0C],
         "bgcol0": read_rgb_rgba_block(data, 0x10),
         "bgcol1": read_rgb_rgba_block(data, 0x20),
